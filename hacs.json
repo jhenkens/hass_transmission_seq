@@ -1,0 +1,13 @@
+{
+    "name": "Transmission Seq",
+    "domains": [
+      "sensor",
+      "switch"
+    ],
+    "homeassistant": "0.109.0",
+    "country": "CZ",
+    "render_readme": true,
+    "iot_class": "Local Polling",
+    "icon": "https://brands.home-assistant.io/_/transmission/icon.png",
+    "logo": "https://brands.home-assistant.io/_/transmission/logo.png"
+  }
