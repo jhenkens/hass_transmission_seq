@@ -3,7 +3,7 @@
   "name": "TransmissionSeq",
   "config_flow": true,
   "documentation": "https://www.home-assistant.io/integrations/transmission",
-  "requirements": ["https://github.com/jhenkens/transmission-rpc/archive/3a51ba7df1eb423a70b836852977d2978e3bad72.zip#transmission-rpc==10.1.1"],
+  "requirements": ["https://github.com/jhenkens/transmission-rpc/archive/8cf943478f7e372dddd425fb010f592f78bb46ea.zip#transmission-rpc==10.1.1"],
   "codeowners": ["@engrbm87", "@JPHutchins"],
   "iot_class": "local_polling",
   "icon": "https://brands.home-assistant.io/_/transmission/icon.png",
