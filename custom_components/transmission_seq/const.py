@@ -1,5 +1,5 @@
 """Constants for the Transmission Bittorent Client component."""
-DOMAIN = "transmission"
+DOMAIN = "transmission_seq"
 
 SWITCH_TYPES = {"on_off": "Switch", "turtle_mode": "Turtle Mode"}
 
