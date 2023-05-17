@@ -140,6 +140,9 @@ async def get_api(hass, entry):
     port = entry[CONF_PORT]
     username = entry.get(CONF_USERNAME)
     password = entry.get(CONF_PASSWORD)
+    protocol = "http"
+    if port == 443:
+        protocol = "https"
 
     try:
         api = await hass.async_add_executor_job(
@@ -149,6 +152,7 @@ async def get_api(hass, entry):
                 password=password,
                 host=host,
                 port=port,
+                protocol=protocol,
             )
         )
         _LOGGER.debug("Successfully connected to %s", host)
