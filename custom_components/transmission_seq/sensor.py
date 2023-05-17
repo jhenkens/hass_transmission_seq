@@ -203,6 +203,7 @@ def _torrents_info(torrents, order, limit, statuses=None):
             "percent_done": f"{torrent.percent_done * 100:.2f}",
             "status": torrent.status,
             "id": torrent.id,
+            "sequential": torrent.sequential
         }
         with suppress(ValueError):
             info["eta"] = str(torrent.eta)

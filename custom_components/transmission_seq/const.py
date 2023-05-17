@@ -21,6 +21,7 @@ SUPPORTED_ORDER_MODES = {
 CONF_ENTRY_ID = "entry_id"
 CONF_LIMIT = "limit"
 CONF_ORDER = "order"
+CONF_SEQUENTIAL = "sequential"
 
 DEFAULT_DELETE_DATA = False
 DEFAULT_LIMIT = 10
@@ -38,6 +39,7 @@ SERVICE_ADD_TORRENT = "add_torrent"
 SERVICE_REMOVE_TORRENT = "remove_torrent"
 SERVICE_START_TORRENT = "start_torrent"
 SERVICE_STOP_TORRENT = "stop_torrent"
+SERVICE_SET_TORRENT_SEQUENTIAL = "set_torrent_sequential"
 
 DATA_UPDATED = "transmission_data_updated"
 

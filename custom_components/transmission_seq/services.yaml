@@ -74,3 +74,27 @@ stop_torrent:
       example: 123
       selector:
         text:
+
+set_torrent_sequential:
+  name: Set a torrent to sequential
+  description: Set a torrent to sequential
+  fields:
+    entry_id:
+      name: Transmission entry
+      description: Config entry id
+      selector:
+        config_entry:
+          integration: transmission
+    id:
+      name: ID
+      description: ID of a torrent
+      required: true
+      example: 123
+      selector:
+        text:
+    sequential:
+      name: sequential
+      required: true
+      example: true
+      selector:
+        boolean:

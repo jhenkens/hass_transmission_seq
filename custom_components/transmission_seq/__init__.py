@@ -36,6 +36,7 @@ from .const import (
     CONF_ENTRY_ID,
     CONF_LIMIT,
     CONF_ORDER,
+    CONF_SEQUENTIAL,
     DATA_UPDATED,
     DEFAULT_DELETE_DATA,
     DEFAULT_LIMIT,
@@ -49,7 +50,9 @@ from .const import (
     SERVICE_REMOVE_TORRENT,
     SERVICE_START_TORRENT,
     SERVICE_STOP_TORRENT,
+    SERVICE_SET_TORRENT_SEQUENTIAL,
 )
+
 from .errors import AuthenticationError, CannotConnect, UnknownError
 
 _LOGGER = logging.getLogger(__name__)
@@ -87,6 +90,15 @@ SERVICE_STOP_TORRENT_SCHEMA = vol.All(
     )
 )
 
+SERVICE_SET_TORRENT_SEQUENTIAL_SCHEMA = vol.All(
+    SERVICE_BASE_SCHEMA.extend(
+        {
+            vol.Required(CONF_ID): cv.positive_int,
+            vol.Required(CONF_SEQUENTIAL): cv.boolean,
+        }
+    )
+)
+
 CONFIG_SCHEMA = cv.removed(DOMAIN, raise_if_present=False)
 
 PLATFORMS = [Platform.SENSOR, Platform.SWITCH]
@@ -117,6 +129,7 @@ async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> 
         hass.services.async_remove(DOMAIN, SERVICE_REMOVE_TORRENT)
         hass.services.async_remove(DOMAIN, SERVICE_START_TORRENT)
         hass.services.async_remove(DOMAIN, SERVICE_STOP_TORRENT)
+        hass.services.async_remove(DOMAIN, SERVICE_SET_TORRENT_SEQUENTIAL)
 
     return unload_ok
 
@@ -235,6 +248,16 @@ class TransmissionClient:
             tm_client.tm_api.stop_torrent(torrent_id)
             tm_client.api.update()
 
+        def set_torrent_sequential(service):
+            """Set torrent sequential."""
+            if not (tm_client := _get_client(self.hass, service.data)):
+                raise ValueError("Transmission instance is not found")
+            tm_client = None
+            torrent_id = service.data[CONF_ID]
+            sequential = service.data[CONF_SEQUENTIAL]
+            tm_client.tm_api.change_torrent(torrent_id, sequential=sequential)
+            tm_client.api.update()
+
         def remove_torrent(service: ServiceCall) -> None:
             """Remove torrent."""
             if not (tm_client := _get_client(self.hass, service.data)):
@@ -270,6 +293,12 @@ class TransmissionClient:
             schema=SERVICE_STOP_TORRENT_SCHEMA,
         )
 
+        self.hass.services.async_register(
+            DOMAIN,
+            SERVICE_SET_TORRENT_SEQUENTIAL,
+            set_torrent_sequential,
+            schema=SERVICE_SET_TORRENT_SEQUENTIAL_SCHEMA,
+        )
         self.config_entry.add_update_listener(self.async_options_updated)
 
     def add_options(self):
