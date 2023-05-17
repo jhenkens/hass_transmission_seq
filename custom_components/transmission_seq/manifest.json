@@ -6,8 +6,7 @@
   "requirements": ["https://github.com/jhenkens/transmission-rpc/archive/260fdddc25bff849c61eb314ff011588e7f412c5.zip#transmission-rpc==4.2.2"],
   "iot_class": "local_polling",
   "loggers": ["transmissionrpc"],
-  "requirements": ["transmission-rpc==4.1.5"],
   "icon": "https://brands.home-assistant.io/_/transmission/icon.png",
   "logo": "https://brands.home-assistant.io/_/transmission/logo.png",
-  "version": "0.4.2"
+  "version": "0.4.3"
 }
