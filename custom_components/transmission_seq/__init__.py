@@ -2,38 +2,44 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from functools import partial
 import logging
+from typing import Any
 
 import transmission_rpc
-from transmission_rpc.error import TransmissionError
+from transmission_rpc.error import (
+    TransmissionAuthError,
+    TransmissionConnectError,
+    TransmissionError,
+)
 import voluptuous as vol
 
-from homeassistant.config_entries import SOURCE_IMPORT
+from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import (
     CONF_HOST,
     CONF_ID,
-    CONF_NAME,
     CONF_PASSWORD,
     CONF_PORT,
     CONF_SCAN_INTERVAL,
     CONF_USERNAME,
+    Platform,
 )
-from homeassistant.exceptions import ConfigEntryNotReady
-from homeassistant.helpers import config_validation as cv
+from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
+from homeassistant.helpers import config_validation as cv, selector
 from homeassistant.helpers.dispatcher import dispatcher_send
 from homeassistant.helpers.event import async_track_time_interval
 
 from .const import (
     ATTR_DELETE_DATA,
     ATTR_TORRENT,
+    CONF_ENTRY_ID,
     CONF_LIMIT,
     CONF_ORDER,
     DATA_UPDATED,
     DEFAULT_DELETE_DATA,
     DEFAULT_LIMIT,
-    DEFAULT_NAME,
     DEFAULT_ORDER,
-    DEFAULT_PORT,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
     EVENT_DOWNLOADED_TORRENT,
@@ -43,98 +49,60 @@ from .const import (
     SERVICE_REMOVE_TORRENT,
     SERVICE_START_TORRENT,
     SERVICE_STOP_TORRENT,
-    SERVICE_SET_TORRENT_SEQUENTIAL,
 )
-
-CONF_SEQUENTIAL = "sequential"
-
 from .errors import AuthenticationError, CannotConnect, UnknownError
 
 _LOGGER = logging.getLogger(__name__)
 
 
-SERVICE_ADD_TORRENT_SCHEMA = vol.Schema(
-    {vol.Required(ATTR_TORRENT): cv.string, vol.Required(CONF_NAME): cv.string}
-)
-
-SERVICE_REMOVE_TORRENT_SCHEMA = vol.Schema(
+SERVICE_BASE_SCHEMA = vol.Schema(
     {
-        vol.Required(CONF_NAME): cv.string,
-        vol.Required(CONF_ID): cv.positive_int,
-        vol.Optional(ATTR_DELETE_DATA, default=DEFAULT_DELETE_DATA): cv.boolean,
+        vol.Exclusive(CONF_ENTRY_ID, "identifier"): selector.ConfigEntrySelector(),
     }
 )
 
-SERVICE_START_TORRENT_SCHEMA = vol.Schema(
-    {
-        vol.Required(CONF_NAME): cv.string,
-        vol.Required(CONF_ID): cv.positive_int,
-    }
+SERVICE_ADD_TORRENT_SCHEMA = vol.All(
+    SERVICE_BASE_SCHEMA.extend({vol.Required(ATTR_TORRENT): cv.string}),
 )
 
-SERVICE_STOP_TORRENT_SCHEMA = vol.Schema(
-    {
-        vol.Required(CONF_NAME): cv.string,
-        vol.Required(CONF_ID): cv.positive_int,
-    }
-)
 
-SERVICE_SET_TORRENT_SEQUENTIAL_SCHEMA = vol.Schema(
-    {
-        vol.Required(CONF_NAME): cv.string,
-        vol.Required(CONF_ID): cv.positive_int,
-        vol.Required(CONF_SEQUENTIAL): cv.boolean,
-    }
-)
-
-TRANS_SCHEMA = vol.All(
-    vol.Schema(
+SERVICE_REMOVE_TORRENT_SCHEMA = vol.All(
+    SERVICE_BASE_SCHEMA.extend(
         {
-            vol.Required(CONF_HOST): cv.string,
-            vol.Optional(CONF_PASSWORD): cv.string,
-            vol.Optional(CONF_USERNAME): cv.string,
-            vol.Optional(CONF_PORT, default=DEFAULT_PORT): cv.port,
-            vol.Optional(CONF_NAME, default=DEFAULT_NAME): cv.string,
-            vol.Optional(
-                CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL
-            ): cv.time_period,
+            vol.Required(CONF_ID): cv.positive_int,
+            vol.Optional(ATTR_DELETE_DATA, default=DEFAULT_DELETE_DATA): cv.boolean,
         }
     )
 )
 
-CONFIG_SCHEMA = vol.Schema(
-    vol.All(cv.deprecated(DOMAIN), {DOMAIN: vol.All(cv.ensure_list, [TRANS_SCHEMA])}),
-    extra=vol.ALLOW_EXTRA,
+SERVICE_START_TORRENT_SCHEMA = vol.All(
+    SERVICE_BASE_SCHEMA.extend({vol.Required(CONF_ID): cv.positive_int}),
 )
 
-PLATFORMS = ["sensor", "switch"]
+SERVICE_STOP_TORRENT_SCHEMA = vol.All(
+    SERVICE_BASE_SCHEMA.extend(
+        {
+            vol.Required(CONF_ID): cv.positive_int,
+        }
+    )
+)
+
+CONFIG_SCHEMA = cv.removed(DOMAIN, raise_if_present=False)
+
+PLATFORMS = [Platform.SENSOR, Platform.SWITCH]
 
 
-async def async_setup(hass, config):
-    """Import the Transmission Component from config."""
-    if DOMAIN in config:
-        for entry in config[DOMAIN]:
-            hass.async_create_task(
-                hass.config_entries.flow.async_init(
-                    DOMAIN, context={"source": SOURCE_IMPORT}, data=entry
-                )
-            )
-
-    return True
-
-
-async def async_setup_entry(hass, config_entry):
+async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
     """Set up the Transmission Component."""
     client = TransmissionClient(hass, config_entry)
     hass.data.setdefault(DOMAIN, {})[config_entry.entry_id] = client
 
-    if not await client.async_setup():
-        return False
+    await client.async_setup()
 
     return True
 
 
-async def async_unload_entry(hass, config_entry):
+async def async_unload_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
     """Unload Transmission Entry from config_entry."""
     client = hass.data[DOMAIN].pop(config_entry.entry_id)
     if client.unsub_timer:
@@ -149,18 +117,8 @@ async def async_unload_entry(hass, config_entry):
         hass.services.async_remove(DOMAIN, SERVICE_REMOVE_TORRENT)
         hass.services.async_remove(DOMAIN, SERVICE_START_TORRENT)
         hass.services.async_remove(DOMAIN, SERVICE_STOP_TORRENT)
-        hass.services.async_remove(DOMAIN, SERVICE_SET_TORRENT_SEQUENTIAL)
 
     return unload_ok
-
-def generate_client(host, port, username, password):
-    protocol = 'http'
-    if host.startswith('https://'):
-        protocol = 'https'
-        host = host[8:]
-    elif host.startswith('http://'):
-        host = host[7:]
-    return transmission_rpc.Client(protocol=protocol, host=host, port=port, username=username, password=password)
 
 
 async def get_api(hass, entry):
@@ -172,21 +130,38 @@ async def get_api(hass, entry):
 
     try:
         api = await hass.async_add_executor_job(
-            generate_client, host, port, username, password
+            partial(
+                transmission_rpc.Client,
+                username=username,
+                password=password,
+                host=host,
+                port=port,
+            )
         )
         _LOGGER.debug("Successfully connected to %s", host)
         return api
 
+    except TransmissionAuthError as error:
+        _LOGGER.error("Credentials for Transmission client are not valid")
+        raise AuthenticationError from error
+    except TransmissionConnectError as error:
+        _LOGGER.error("Connecting to the Transmission client %s failed", host)
+        raise CannotConnect from error
     except TransmissionError as error:
-        if "401: Unauthorized" in str(error):
-            _LOGGER.error("Credentials for Transmission client are not valid")
-            raise AuthenticationError from error
-        if "111: Connection refused" in str(error):
-            _LOGGER.error("Connecting to the Transmission client %s failed", host)
-            raise CannotConnect from error
-
         _LOGGER.error(error)
         raise UnknownError from error
+
+
+def _get_client(hass: HomeAssistant, data: dict[str, Any]) -> TransmissionClient | None:
+    """Return client from integration name or entry_id."""
+    if (
+        (entry_id := data.get(CONF_ENTRY_ID))
+        and (entry := hass.config_entries.async_get_entry(entry_id))
+        and entry.state == ConfigEntryState.LOADED
+    ):
+        return hass.data[DOMAIN][entry_id]
+
+    return None
 
 
 class TransmissionClient:
@@ -205,15 +180,15 @@ class TransmissionClient:
         """Return the TransmissionData object."""
         return self._tm_data
 
-    async def async_setup(self):
+    async def async_setup(self) -> None:
         """Set up the Transmission client."""
 
         try:
             self.tm_api = await get_api(self.hass, self.config_entry.data)
         except CannotConnect as error:
             raise ConfigEntryNotReady from error
-        except (AuthenticationError, UnknownError):
-            return False
+        except (AuthenticationError, UnknownError) as error:
+            raise ConfigEntryAuthFailed from error
 
         self._tm_data = TransmissionData(self.hass, self.config_entry, self.tm_api)
 
@@ -222,18 +197,15 @@ class TransmissionClient:
         self.add_options()
         self.set_scan_interval(self.config_entry.options[CONF_SCAN_INTERVAL])
 
-        self.hass.config_entries.async_setup_platforms(self.config_entry, PLATFORMS)
+        await self.hass.config_entries.async_forward_entry_setups(
+            self.config_entry, PLATFORMS
+        )
 
-        def add_torrent(service):
+        def add_torrent(service: ServiceCall) -> None:
             """Add new torrent to download."""
-            tm_client = None
-            for entry in self.hass.config_entries.async_entries(DOMAIN):
-                if entry.data[CONF_NAME] == service.data[CONF_NAME]:
-                    tm_client = self.hass.data[DOMAIN][entry.entry_id]
-                    break
-            if tm_client is None:
-                _LOGGER.error("Transmission instance is not found")
-                return
+            if not (tm_client := _get_client(self.hass, service.data)):
+                raise ValueError("Transmission instance is not found")
+
             torrent = service.data[ATTR_TORRENT]
             if torrent.startswith(
                 ("http", "ftp:", "magnet:")
@@ -245,59 +217,29 @@ class TransmissionClient:
                     "Could not add torrent: unsupported type or no permission"
                 )
 
-        def start_torrent(service):
+        def start_torrent(service: ServiceCall) -> None:
             """Start torrent."""
-            tm_client = None
-            for entry in self.hass.config_entries.async_entries(DOMAIN):
-                if entry.data[CONF_NAME] == service.data[CONF_NAME]:
-                    tm_client = self.hass.data[DOMAIN][entry.entry_id]
-                    break
-            if tm_client is None:
-                _LOGGER.error("Transmission instance is not found")
-                return
+            if not (tm_client := _get_client(self.hass, service.data)):
+                raise ValueError("Transmission instance is not found")
+
             torrent_id = service.data[CONF_ID]
             tm_client.tm_api.start_torrent(torrent_id)
             tm_client.api.update()
 
-        def stop_torrent(service):
+        def stop_torrent(service: ServiceCall) -> None:
             """Stop torrent."""
-            tm_client = None
-            for entry in self.hass.config_entries.async_entries(DOMAIN):
-                if entry.data[CONF_NAME] == service.data[CONF_NAME]:
-                    tm_client = self.hass.data[DOMAIN][entry.entry_id]
-                    break
-            if tm_client is None:
-                _LOGGER.error("Transmission instance is not found")
-                return
+            if not (tm_client := _get_client(self.hass, service.data)):
+                raise ValueError("Transmission instance is not found")
+
             torrent_id = service.data[CONF_ID]
             tm_client.tm_api.stop_torrent(torrent_id)
             tm_client.api.update()
 
-        def set_torrent_sequential(service):
-            """Set torrent sequential."""
-            tm_client = None
-            for entry in self.hass.config_entries.async_entries(DOMAIN):
-                if entry.data[CONF_NAME] == service.data[CONF_NAME]:
-                    tm_client = self.hass.data[DOMAIN][entry.entry_id]
-                    break
-            if tm_client is None:
-                _LOGGER.error("Transmission instance is not found")
-                return
-            torrent_id = service.data[CONF_ID]
-            sequential = service.data[CONF_SEQUENTIAL]
-            tm_client.tm_api.change_torrent(torrent_id, sequential=sequential)
-            tm_client.api.update()
-
-        def remove_torrent(service):
+        def remove_torrent(service: ServiceCall) -> None:
             """Remove torrent."""
-            tm_client = None
-            for entry in self.hass.config_entries.async_entries(DOMAIN):
-                if entry.data[CONF_NAME] == service.data[CONF_NAME]:
-                    tm_client = self.hass.data[DOMAIN][entry.entry_id]
-                    break
-            if tm_client is None:
-                _LOGGER.error("Transmission instance is not found")
-                return
+            if not (tm_client := _get_client(self.hass, service.data)):
+                raise ValueError("Transmission instance is not found")
+
             torrent_id = service.data[CONF_ID]
             delete_data = service.data[ATTR_DELETE_DATA]
             tm_client.tm_api.remove_torrent(torrent_id, delete_data=delete_data)
@@ -328,16 +270,7 @@ class TransmissionClient:
             schema=SERVICE_STOP_TORRENT_SCHEMA,
         )
 
-        self.hass.services.async_register(
-            DOMAIN,
-            SERVICE_SET_TORRENT_SEQUENTIAL,
-            set_torrent_sequential,
-            schema=SERVICE_SET_TORRENT_SEQUENTIAL_SCHEMA,
-        )
-
         self.config_entry.add_update_listener(self.async_options_updated)
-
-        return True
 
     def add_options(self):
         """Add options for entry."""
@@ -371,7 +304,7 @@ class TransmissionClient:
         )
 
     @staticmethod
-    async def async_options_updated(hass, entry):
+    async def async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
         """Triggered by config entry options updates."""
         tm_client = hass.data[DOMAIN][entry.entry_id]
         tm_client.set_scan_interval(entry.options[CONF_SCAN_INTERVAL])
@@ -381,7 +314,9 @@ class TransmissionClient:
 class TransmissionData:
     """Get the latest data and update the states."""
 
-    def __init__(self, hass, config, api: transmission_rpc.Client):
+    def __init__(
+        self, hass: HomeAssistant, config: ConfigEntry, api: transmission_rpc.Client
+    ) -> None:
         """Initialize the Transmission RPC API."""
         self.hass = hass
         self.config = config
@@ -485,13 +420,13 @@ class TransmissionData:
 
     def start_torrents(self):
         """Start all torrents."""
-        if len(self._torrents) <= 0:
+        if not self._torrents:
             return
         self._api.start_all()
 
     def stop_torrents(self):
         """Stop all active torrents."""
-        if len(self._torrents) == 0:
+        if not self._torrents:
             return
         torrent_ids = [torrent.id for torrent in self._torrents]
         self._api.stop_torrent(torrent_ids)
